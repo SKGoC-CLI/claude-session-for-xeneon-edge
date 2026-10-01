@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tr('Claude Session')</title>
+<link rel="icon" type="image/svg+xml" href="resources/icon.svg">
+
+<meta
+  name="x-icue-property"
+  content="bridgePort"
+  data-label="tr('Bridge Port')"
+  data-type="textfield"
+  data-default="'8975'"
+>
+<meta
+  name="x-icue-property"
+  content="showTitle"
+  data-label="tr('Show Session Title')"
+  data-type="switch"
+  data-default="true"
+>
+<meta
+  name="x-icue-property"
+  content="gaugeMode"
+  data-label="tr('Context Gauge Color')"
+  data-type="combobox"
+  data-values="[{'key':'gradient','value':tr('Green to red by fill')},{'key':'accent','value':tr('Accent color')},{'key':'custom','value':tr('Custom color')}]"
+  data-default="'gradient'"
+>
+<meta
+  name="x-icue-property"
+  content="gaugeColor"
+  data-label="tr('Custom Gauge Color')"
+  data-type="color"
+  data-default="'#5fd97b'"
+>
+<meta
+  name="x-icue-property"
+  content="themeAccent"
+  data-label="tr('Accent Color')"
+  data-type="color"
+  data-default="'#e8630a'"
+>
+<meta
+  name="x-icue-property"
+  content="themeText"
+  data-label="tr('Text Color')"
+  data-type="color"
+  data-default="'#ffffff'"
+>
+<meta
+  name="x-icue-property"
+  content="themeBg"
+  data-label="tr('Background')"
+  data-type="color"
+  data-default="'#000000'"
+>
+<meta
+  name="x-icue-property"
+  content="themeOpacity"
+  data-label="tr('Widget Transparency')"
+  data-type="slider"
+  data-default="80"
+  data-min="1"
+  data-max="100"
+  data-step="1"
+  data-unit-label="'%'"
+>
+
+<script type="application/json" id="x-icue-groups">
+[
+  {
+    "title": "tr('Claude Session Settings')",
+    "properties": ["bridgePort", "showTitle", "gaugeMode", "gaugeColor", "themeAccent", "themeText", "themeBg", "themeOpacity"],
+    "info": "`Needs ClaudeEdgeBridge running on this PC. Shows a pending question so you know to answer it in the app.`"
+  }
+]
+</script>
+
+<link rel="stylesheet" href="styles/edge.css">
+</head>
+<body>
+<div id="backdrop"></div>
+<div id="root">
+  <div id="bar">
+    <span id="dot"></span>
+    <span id="state">connecting</span>
+    <span id="clock"></span>
+    <span id="title"></span>
+  </div>
+  <!-- Context Fill (see CONTEXT.md): how full the shown session's context window is.
+       Its own row, every mode — hidden by JS until the bridge has a number for it. -->
+  <div id="ctx">
+    <span id="ctxlab">context</span>
+    <i id="ctxbar"><i></i></i>
+    <span id="ctxval"></span>
+  </div>
+  <!-- Second row, always on screen: whatever context the current mode has on the left
+       (the user's prompt, or the question's `from` label), and the model/cycle chips
+       pinned right. They used to ride the status bar and move around; a chip you have
+       to hunt for is worse than a chip that costs a row. -->
+  <div id="sub">
+    <div id="prompt"></div>
+    <div id="qfrom"></div>
+    <span id="model"></span>
+    <button id="cycle" class="cycle" type="button"></button>
+  </div>
+  <div id="stack">
+    <div id="text"></div>
+    <i class="sb" id="sb-text"><i></i></i>
+  </div>
+  <div id="card">
+    <div id="qtext">
+      <div id="question"></div>
+      <i class="sb" id="sb-question"><i></i></i>
+    </div>
+    <div id="optwrap">
+      <div id="options"></div>
+      <i class="sb" id="sb-options"><i></i></i>
+    </div>
+  </div>
+  <!-- Step Feed (see CONTEXT.md): the current turn's last few tool calls, plus a
+       "thinking" row while nothing is running. Outside #stack/#card so it survives both
+       modes; rows are built once and only their text changes. -->
+  <div id="feed"></div>
+</div>
+
+<script>
+// No "use strict" and no `var icueEvents` on purpose: iCUE pre-declares the widget
+// globals, and every stock widget assigns them bare. Declaring them here kills the
+// whole script at parse time and the widget renders as static HTML.
+
+var POLL_MS = 1500;       // a question has to appear on screen promptly
+var BEAT_MS = 5000;       // bridge treats us as gone after 15 s of silence
+var TICK_MS = 1000;
+var PIN_MS = 60000;       // how long a manually-cycled session stays on screen
+
+var root = document.getElementById("root");
+var dot = document.getElementById("dot");
+var stateEl = document.getElementById("state");
+var clockEl = document.getElementById("clock");
+var titleEl = document.getElementById("title");
+var modelEl = document.getElementById("model");
+var ctxEl = document.getElementById("ctx");
+var ctxValEl = document.getElementById("ctxval");
+var ctxFillEl = document.getElementById("ctxbar").firstChild;
+var cycleEl = document.getElementById("cycle");
+var textEl = document.getElementById("text");
+var promptEl = document.getElementById("prompt");
+var qfromEl = document.getElementById("qfrom");
+var questionEl = document.getElementById("question");
+var optionsEl = document.getElementById("options");
+var feedEl = document.getElementById("feed");
+var FEED_ROWS = 5;
+var feedRows = [];
+var shortSlot = window.matchMedia("(min-aspect-ratio: 2/1)");   // same query as edge.css
+for (var fi = 0; fi < FEED_ROWS; fi++) {
+  var row = document.createElement("div");
+  row.className = "step";
+  row.innerHTML = "<span class='ic'></span><span class='lb'></span><span class='tm'></span>";
+  row.style.display = "none";
+  feedEl.appendChild(row);
+  feedRows.push(row);
+}
+
+var latest = null;
+var reachable = false;
+var shownQuestionId = null;   // which question is currently painted
+var pollSeq = 0;
+var appliedSeq = 0;
+
+var selectedSessionId = null; // null = auto (follow whichever session the bridge picks)
+var pinUntil = 0;             // Date.now() ms; past this, a cycled selection reverts to auto
+
+var cfg = { port: "8975", showTitle: true, accent: "#e8630a", text: "#ffffff", bg: "#000000", opacity: 0.8,
+            gaugeMode: "gradient", gaugeColor: "#5fd97b" };
+
+function readSettings() {
+  if (typeof bridgePort !== "undefined" && bridgePort) cfg.port = String(bridgePort);
+  // Dev loop only: iCUE never passes a query string, so this just lets the page be
+  // pointed at a mock server while the layout is being iterated on in a browser.
+  var override = /[?&]port=(\d+)/.exec(location.search);
+  if (override) cfg.port = override[1];
+  if (typeof showTitle !== "undefined") cfg.showTitle = !!showTitle;
+  // themeAccent etc., not accentColor/textColor/backgroundColor/transparency: iCUE treats those
+  // four names as its own Personalization set and hides them behind the Custom Style switch
+  // no matter which group they are declared in (seen on the panel, v1.0.16).
+  if (typeof themeAccent !== "undefined" && themeAccent) cfg.accent = String(themeAccent);
+  if (typeof themeText !== "undefined" && themeText) cfg.text = String(themeText);
+  if (typeof themeBg !== "undefined" && themeBg) cfg.bg = String(themeBg);
+  if (typeof themeOpacity !== "undefined" && themeOpacity) cfg.opacity = Number(themeOpacity) / 100;
+  if (typeof gaugeMode !== "undefined" && gaugeMode) cfg.gaugeMode = String(gaugeMode);
+  if (typeof gaugeColor !== "undefined" && gaugeColor) cfg.gaugeColor = String(gaugeColor);
+}
+
+function base() { return "http://127.0.0.1:" + cfg.port; }
+function now() { return Math.floor(Date.now() / 1000); }
+
+function pad(n) { return n < 10 ? "0" + n : String(n); }
+
+function hhmm(unixSeconds) {
+  var d = new Date(unixSeconds * 1000);
+  return pad(d.getHours()) + ":" + pad(d.getMinutes());
+}
+
+// "claude-opus-5" -> "Opus 5", "claude-haiku-4-5-20251001" -> "Haiku 4 5"
+function shortModel(model) {
+  if (!model) return "";
+  var s = model.replace(/^claude-/, "").replace(/-\d{8}$/, "");
+  return s.split("-").map(function (w) { return w.charAt(0).toUpperCase() + w.slice(1); }).join(" ");
+}
+
+// The pending question, or null.
+function pendingQuestion() {
+  if (!reachable || !latest || !latest.question) return null;
+  return latest.question;
+}
+
+// write only when the value really changes - overwriting with the same value still counts as a DOM mutation,
+// which makes iCUE push a new frame to the screen every second for nothing
+function setText(el, s) { if (el.textContent !== s) el.textContent = s; }
+
+// A scroll pane clips whatever happens to sit at its bottom edge — often through the
+// middle of a glyph — so a half-line reads as broken rendering, or as part of whatever
+// sits below the pane. Fading that edge hides the cut. Unlike the old always-on fade
+// this one is only present when there IS more below, so it never lies about the end of
+// a message. Guarded like setText(): a no-op class write is still a DOM mutation, and
+// iCUE repaints the whole panel for every one of those.
+// Both edges, because the panel gives no other hint that a pane scrolls: iCUE's Qt
+// WebEngine does not render a styled ::-webkit-scrollbar at all (proven on the real
+// panel, v1.0.9), while mask-image has worked here for many versions. The common case
+// is #text auto-scrolled to the newest line with a whole conversation above it and
+// nothing saying so.
+function syncFade(el) {
+  var more = el.scrollTop + el.clientHeight < el.scrollHeight - 2;
+  var above = el.scrollTop > 2;
+  if (el.classList.contains("has-more") !== more) el.classList.toggle("has-more", more);
+  if (el.classList.contains("has-above") !== above) el.classList.toggle("has-above", above);
+  syncBar(el, more || above);
+}
+
+// The visible scroll bar, because a faded edge alone still did not read as "this pane
+// scrolls" from a chair. Driven from here and nowhere else on purpose: scrollTop,
+// clientHeight and scrollHeight are the same three values syncFade just read, so the bar
+// costs no extra layout flush -- only the style writes, guarded the way setText() is.
+// The bar is a sibling of the pane, not a child, so the pane's mask-image cannot fade
+// away the very indicator it exists to supplement.
+function syncBar(el, scrollable) {
+  var sb = el._sb;
+  if (!sb) return;
+  var show = scrollable ? "block" : "none";
+  if (sb.style.display !== show) sb.style.display = show;
+  if (!scrollable) return;
+  // percentages, so nothing here has to know the track's pixel height
+  var h = Math.max(el.clientHeight / el.scrollHeight * 100, 10);  // floor, because a thumb
+  var t = el.scrollTop / el.scrollHeight * 100;                   // too short to see is
+  if (t + h > 100) t = 100 - h;                                   // not an indicator
+  var hs = h.toFixed(1) + "%", ts = t.toFixed(1) + "%";
+  var th = sb.firstChild;
+  if (sb._h !== hs) { sb._h = hs; th.style.height = hs; }
+  if (sb._t !== ts) { sb._t = ts; th.style.top = ts; }
+}
+
+// At most one syncFade per element per frame. A momentum swipe fires `scroll` at frame
+// rate, and syncFade's first act is to read scrollHeight — a forced synchronous layout
+// that the class guard above does NOT prevent, because the read happens before it. This
+// widget already pins an iCUE thread near 100% for reasons nobody has found yet
+// (WORK-LOG-2026-08-23-icue-hang.md); do not hand it a per-frame layout flush as well.
+function scheduleFade(el) {
+  if (el._fadeQueued) return;
+  el._fadeQueued = true;
+  requestAnimationFrame(function () { el._fadeQueued = false; syncFade(el); });
+}
+
+function renderBar(q) {
+  var cls = [];
+  if (!reachable) cls.push("is-down");
+  else if (q) cls.push("is-asking", "is-working");
+  else if (latest && latest.ok && latest.status === "working") cls.push("is-working");
+  else if (latest && latest.ok) cls.push("is-waiting");
+  if (selectedSessionId) cls.push("is-pinned");
+  var cls2 = cls.join(" ");
+  if (root.className !== cls2) root.className = cls2;
+
+  renderCycle();
+
+  if (!reachable) {
+    setText(stateEl, "bridge offline");
+  } else if (!latest || !latest.ok) {
+    setText(stateEl, (latest && latest.error) ? latest.error : "no session");
+  } else if (q) {
+    setText(stateEl, q.header ? ("ask · " + q.header) : "ask");
+  } else if (latest.status === "working") {
+    var run = runningStep();
+    if (run) setText(stateEl, "working · " + stepText(run) + " · " + dur(now() - run.start));
+    else if (latest.activity) setText(stateEl, "working · " + latest.activity);
+    else if (latest.quiet_since) setText(stateEl, "working · thinking · " + dur(now() - latest.quiet_since));
+    else setText(stateEl, "working");
+  } else {
+    // No counter here any more — `updated HH:MM` lives in #clock for every status,
+    // so repeating it would print the same string twice in one bar.
+    setText(stateEl, "your turn");
+  }
+
+  // updated_at, not text_at: a grilling run can go many minutes with only tool calls and
+  // questions and no plain text, and a clock pinned to the last text read as a frozen panel
+  if (reachable && latest && latest.ok && latest.updated_at) {
+    setText(clockEl, "updated " + hhmm(latest.updated_at));
+  } else {
+    setText(clockEl, "");
+  }
+  setText(titleEl, (cfg.showTitle && latest && latest.title) ? latest.title : "");
+  setText(modelEl, (latest && latest.model)
+    ? (shortModel(latest.model) + (latest.effort ? (" · " + latest.effort) : ""))
+    : "");
+  renderContext();
+}
+
+// 83 -> "1:23"; clamped at 0 so a clock a second ahead of the transcript never shows "-0:01"
+function dur(s) {
+  s = Math.max(0, Math.floor(s));
+  return Math.floor(s / 60) + ":" + pad(s % 60);
+}
+
+function steps() { return (reachable && latest && latest.ok && latest.steps) || []; }
+
+// the newest step still waiting for its result, or null
+function runningStep() {
+  var st = steps();
+  for (var i = st.length - 1; i >= 0; i--) if (st[i].end == null) return st[i];
+  return null;
+}
+
+function stepText(s) { return s.label ? (s.name + " · " + s.label) : s.name; }
+
+// Step Feed. Kept after the turn ends (as a summary of what was done), hidden only when the
+// turn had no steps at all. While working with nothing running, the last row is a Thinking
+// Gap counting up from the last transcript write -- the bridge cannot tell thinking from
+// stuck, so the number is the honest answer.
+function renderFeed() {
+  var items = [];
+  var st = steps();
+  for (var i = 0; i < st.length; i++) {
+    var s = st[i];
+    var running = s.end == null && latest.status === "working";
+    // a question still waiting is already the card on screen — its row would only repeat it
+    if (s.end == null && (s.name === "AskUserQuestion" || s.name === "ExitPlanMode")) continue;
+    // no result and no longer working = interrupted/abandoned: no tick, no false "✓"
+    var dead = s.end == null && !running;
+    items.push({ ic: running ? "▶" : dead ? "·" : "✓", lb: stepText(s),
+                 tm: dead ? "–" : dur((running ? now() : s.end) - s.start), cls: running ? "step is-run" : "step" });
+  }
+  if (latest && latest.ok && latest.status === "working" && !latest.question && !runningStep() && latest.quiet_since) {
+    items.push({ ic: "▶", lb: "thinking", tm: dur(now() - latest.quiet_since), cls: "step is-run" });
+  }
+  // a short wide slot (S, 853×360) has ~110px left for the message at 5 rows — keep 3
+  items = items.slice(-(shortSlot.matches ? 3 : FEED_ROWS));
+  var show = items.length ? "flex" : "none";
+  if (feedEl.style.display !== show) feedEl.style.display = show;
+  for (var r = 0; r < FEED_ROWS; r++) {
+    var row = feedRows[r], it = items[r];
+    var disp = it ? "flex" : "none";
+    if (row.style.display !== disp) row.style.display = disp;
+    if (!it) continue;
+    if (row.className !== it.cls) row.className = it.cls;
+    setText(row.childNodes[0], it.ic);
+    setText(row.childNodes[1], it.lb);
+    setText(row.childNodes[2], it.tm);
+  }
+}
+
+// 90123 -> "90k", 1000000 -> "1M", 200000 -> "200k". Round to k first so 999600 is
+// "1M", not "1000k".
+function fmtTokens(n) {
+  var k = Math.round(n / 1000);
+  return k >= 1000 ? (Math.round(k / 100) / 10) + "M" : k + "k";
+}
+
+// Context Fill row. Hidden, not 0%, when there is no number: a fresh session has had no
+// assistant turn yet, and "0%" would read as an answer. Colour per the Context Gauge Color
+// setting: one hue swept green→red by the percentage (no stops to tune), the accent, or a
+// picked colour. Style writes are guarded like setText(): iCUE repaints the panel for
+// every DOM mutation, and this runs once a second.
+function renderContext() {
+  var used = (reachable && latest && latest.ok) ? latest.context_tokens : null;
+  var win = latest && latest.context_window;
+  var show = (used != null && win) ? "flex" : "none";
+  if (ctxEl.style.display !== show) ctxEl.style.display = show;
+  if (show === "none") return;
+  var pct = Math.min(100, Math.round(used / win * 100));
+  setText(ctxValEl, pct + "% · " + fmtTokens(used) + " / " + fmtTokens(win));
+  var w = Math.max(pct, 1) + "%";   // 1% floor: a zero-width fill looks like a broken bar
+  var bg = cfg.gaugeMode === "accent" ? cfg.accent
+         : cfg.gaugeMode === "custom" ? cfg.gaugeColor
+         : "hsl(" + Math.round(120 * (1 - pct / 100)) + ", 80%, 50%)";
+  if (ctxFillEl.style.width !== w) ctxFillEl.style.width = w;
+  if (ctxFillEl._bg !== bg) { ctxFillEl._bg = bg; ctxFillEl.style.background = bg; }
+}
+
+// "2/3 ▶" — index of the session currently on screen (pinned or, if none, the auto winner)
+// among the active sessions, and the total. Hidden entirely when there is nothing to cycle to.
+function renderCycle() {
+  var sessions = (latest && latest.sessions) || [];
+  if (!reachable || sessions.length < 2) {
+    if (cycleEl.style.display !== "none") cycleEl.style.display = "none";
+    return;
+  }
+  // an explicit value, not "" — clearing the inline style falls back to the stylesheet,
+  // where #cycle is display:none, and the button would never appear
+  if (cycleEl.style.display !== "inline-block") cycleEl.style.display = "inline-block";
+
+  var currentId = selectedSessionId || (latest && latest.session_id);
+  var idx = 0;
+  for (var i = 0; i < sessions.length; i++) {
+    if (sessions[i].id === currentId) { idx = i; break; }
+  }
+  setText(cycleEl, (idx + 1) + "/" + sessions.length + " ▶");
+}
+
+function cycleSession() {
+  var sessions = (latest && latest.sessions) || [];
+  if (sessions.length < 2) return;
+  var currentId = selectedSessionId || (latest && latest.session_id);
+  var idx = -1;
+  for (var i = 0; i < sessions.length; i++) {
+    if (sessions[i].id === currentId) { idx = i; break; }
+  }
+  selectedSessionId = sessions[(idx + 1) % sessions.length].id;
+  restartPin();
+}
+
+// tapping the cycle button, or paging/scrolling the text pane, all count as "still reading
+// this session" — 60s from the most recent one of those before it reverts to auto
+function restartPin() {
+  if (selectedSessionId) pinUntil = Date.now() + PIN_MS;
+}
+
+// server-side truth for "is the pinned session still active" is `sessions` — if it drops out
+// (went quiet for 30 min), fall back to auto quietly rather than keep polling a dead id
+function pinnedSessionStillActive() {
+  if (!selectedSessionId || !latest || !latest.sessions) return false;
+  for (var i = 0; i < latest.sessions.length; i++) {
+    if (latest.sessions[i].id === selectedSessionId) return true;
+  }
+  return false;
+}
+
+function renderCard(q) {
+  if (!q) { shownQuestionId = null; return; }
+  if (q.id === shownQuestionId) return;   // already painted; repainting would kill a press
+  shownQuestionId = q.id;
+
+  qfromEl.textContent = q.from || "";
+  questionEl.textContent = q.question || "";
+  questionEl.scrollTop = 0;   // the pane is reused, so the previous question's scroll would stick
+  optionsEl.textContent = "";
+
+  var opts = q.options || [];
+  for (var i = 0; i < opts.length; i++) optionsEl.appendChild(buildOption(q, opts[i]));
+
+  syncFade(questionEl);
+  optionsEl.scrollTop = 0;   // reused pane, same as the question above
+  syncFade(optionsEl);
+}
+
+// Read-only: the card is informational only now, answering always happens in
+// the app, so this is a plain div — never a button — and has no click handler.
+function buildOption(q, opt) {
+  var el = document.createElement("div");
+  el.className = "opt";
+
+  var lab = document.createElement("span");
+  lab.className = "lab";
+  lab.textContent = opt.label || "";
+  el.appendChild(lab);
+
+  if (opt.description) {
+    var desc = document.createElement("span");
+    desc.className = "desc";
+    desc.textContent = opt.description;
+    el.appendChild(desc);
+  }
+
+  return el;
+}
+
+function post(path, body) {
+  // Deliberately no Content-Type header: fetch then sends text/plain, which is
+  // CORS-safelisted, so the browser skips the OPTIONS preflight entirely.
+  fetch(base() + path, { method: "POST", body: JSON.stringify(body) }).catch(function () {});
+}
+
+function render() {
+  if (selectedSessionId && Date.now() > pinUntil) selectedSessionId = null; // pin lapsed
+  var q = pendingQuestion();
+  renderBar(q);
+  renderFeed();
+  {   // text + prompt stay live while asking too — the card is gone (see edge.css)
+    var body = (reachable && latest && latest.ok && latest.text) ? latest.text : "";
+    if (textEl.textContent !== body) {
+      textEl.textContent = body;
+      // The text is a replacement, not an append, so the old scroll position is
+      // meaningless — always jump to the bottom (the newest content).
+      textEl.scrollTop = textEl.scrollHeight;
+      syncFade(textEl);
+    }
+    var prompt = (reachable && latest && latest.ok && latest.prompt) ? latest.prompt : "";
+    setText(promptEl, prompt ? ("› " + prompt) : "");
+  }
+}
+
+// iCUE sizes the widget after the page has loaded, and the slot can be resized
+// later from the dashboard. The scroll set above was clamped against the OLD
+// height, so without this the pane is left stranded mid-message until the next
+// time Claude says something.
+window.addEventListener("resize", function () {
+  textEl.scrollTop = textEl.scrollHeight;
+  syncFade(textEl);
+  syncFade(questionEl);
+  syncFade(optionsEl);
+});
+
+// swiping the session text pane means the user is actively reading a cycled-to
+// session — treat it the same as a fresh tap of the cycle button
+textEl._sb = document.getElementById("sb-text");
+questionEl._sb = document.getElementById("sb-question");
+optionsEl._sb = document.getElementById("sb-options");
+
+textEl.addEventListener("scroll", function () { restartPin(); scheduleFade(textEl); });
+questionEl.addEventListener("scroll", function () { scheduleFade(questionEl); });
+optionsEl.addEventListener("scroll", function () { scheduleFade(optionsEl); });
+cycleEl.addEventListener("click", cycleSession);
+
+function poll() {
+  pollSeq++;
+  var seq = pollSeq;
+  var url = base() + "/session.json";
+  if (selectedSessionId) url += "?session=" + encodeURIComponent(selectedSessionId);
+  fetch(url, { cache: "no-store" })
+    .then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    })
+    .then(function (data) {
+      // a request fired later may come back first (iCUE opens several connections) - an older result must not overwrite a newer one
+      if (seq < appliedSeq) return;
+      appliedSeq = seq;
+      latest = data; reachable = true;
+      if (selectedSessionId && !pinnedSessionStillActive()) { selectedSessionId = null; pinUntil = 0; }
+      render();
+    })
+    .catch(function () {
+      if (seq < appliedSeq) return;
+      appliedSeq = seq;
+      reachable = false; render();
+    });
+}
+
+function beat() { post("/heartbeat", {}); }
+
+function applyTheme() {
+  readSettings();
+  var s = document.documentElement.style;
+  s.setProperty("--accent", cfg.accent);
+  s.setProperty("--text", cfg.text);
+  s.setProperty("--bg", cfg.bg);
+  s.setProperty("--opacity", String(cfg.opacity));
+  render();
+}
+
+function onIcueInitialized() {
+  applyTheme();
+  beat();
+  poll();
+}
+
+icueEvents = {
+  "onICUEInitialized": onIcueInitialized,
+  "onDataUpdated": applyTheme
+};
+
+// Late-loading guard: if iCUE finished initialising before this script ran, no
+// event is coming, so kick off manually (same pattern as the stock widgets).
+if (typeof iCUE_initialized !== "undefined" && iCUE_initialized) {
+  onIcueInitialized();
+}
+
+// Also works standalone in a browser, which is how the layout gets iterated on.
+// applyTheme (not render) so settings are read even when no iCUE init event fires;
+// under iCUE this just runs once more, which is harmless.
+applyTheme();
+poll();
+beat();
+setInterval(poll, POLL_MS);
+setInterval(beat, BEAT_MS);
+setInterval(render, TICK_MS);   // keeps the question countdown moving
+</script>
+</body>
+</html>

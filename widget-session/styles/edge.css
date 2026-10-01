@@ -1,0 +1,492 @@
+/* Claude Session widget — CORSAIR XENEON EDGE (dashboard_lcd).
+   Same vw/vh sizing approach as the Claude Usage widget: one stylesheet has to
+   cover every slot size (S/M/L/XL, horizontal and vertical) because iCUE does
+   not document its pixel breakpoints. */
+
+:root {
+  --accent: #e8630a;
+  --text: #ffffff;
+  --bg: #000000;
+  --opacity: 0.8;
+  --muted: rgba(255, 255, 255, 0.45);
+  --line: rgba(255, 255, 255, 0.14);
+  --warn: #ffb020;
+  --crit: #ff5555;
+  --live: #5fd97b;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  color: var(--text);
+  font-family: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  /* The screen is a touchscreen and long Thai answers overflow — but a stray
+     swipe must not rubber-band the whole page, only the text pane. */
+  overscroll-behavior: none;
+  user-select: none;
+}
+
+#backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  opacity: var(--opacity);
+}
+
+#root {
+  position: relative;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: min(1.4vh, 1.8vw);
+  padding: min(3.5vh, 4vw);
+}
+
+/* ---------- status line (both modes) ---------- */
+
+#bar {
+  display: flex;
+  align-items: center;
+  gap: min(1.4vw, 2.4vh);
+  flex: none;
+  font-size: min(2.6vw, 7vh);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  line-height: 1;
+}
+
+#dot {
+  width: 0.8em;
+  height: 0.8em;
+  min-width: 7px;
+  min-height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex: none;
+}
+#root.is-working #dot { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+#root.is-waiting #dot { background: var(--live); }
+#root.is-down    #dot { background: var(--crit); }
+
+@keyframes pulse { 50% { opacity: 0.25; } }
+
+/* Can carry a whole step label now ("working · Bash · Build bridge · 0:12"), so it may
+   shrink and ellipsize; the title still gives up its room first (flex: 1 vs 0 1 auto). */
+#state { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+#root.is-down #state { color: var(--crit); }
+
+/* Session title is the first thing to give up room when the slot is narrow. */
+#title {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#clock {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+#root.is-asking #clock { color: var(--warn); }
+
+#model {
+  flex: none;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--muted);
+}
+
+/* Pinned to a cycled-to session rather than the live auto-selected one — same muted
+   treatment #model/#clock already use, plus italics so it reads as "not the live feed"
+   at a glance from a chair. */
+#root.is-pinned #title { color: var(--muted); font-style: italic; }
+/* …and on the button itself. Border only: a colour here would outrank #cycle:active's
+   (two IDs to one) and sink the pressed label into the fill. */
+#root.is-pinned #cycle { border-color: var(--accent); }
+
+/* ---------- Context Fill row (both modes; JS shows it only once there is a number) ---------- */
+
+#ctx {
+  display: none;               /* JS: flex */
+  align-items: center;
+  gap: min(1.4vw, 2.4vh);
+  flex: none;
+  font-size: min(2.6vw, 7vh);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  line-height: 1;
+  color: var(--muted);
+}
+#ctxlab { flex: none; }
+#ctxval { flex: none; color: var(--text); text-transform: none; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+/* The track. Its own element rather than a background on #ctx so the label and value
+   never sit on top of the fill. */
+#ctxbar {
+  flex: 1;
+  min-width: 0;
+  height: 0.55em;
+  min-height: 5px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+  display: block;
+}
+#ctxbar > i {
+  display: block;
+  height: 100%;
+  width: 0;                    /* JS: N% */
+  border-radius: inherit;
+  /* colour comes from JS (hsl swept by %); width animates so a jump after compaction
+     reads as a movement, not a glitch */
+  transition: width 0.6s ease;
+}
+
+/* ---------- second row: context on the left, chips pinned right (both modes) ---------- */
+
+/* Always on screen, even with nothing on its left — the chips are what the eye goes
+   looking for, and a control that moves rows depending on whether a prompt happens to
+   exist is worse than one that costs a fixed row. Outside #stack on purpose: #stack is
+   hidden outright in question mode, and this row is not. */
+#sub {
+  display: flex;
+  align-items: baseline;
+  gap: min(1.4vw, 2.4vh);
+  flex: none;
+  font-size: min(2.6vw, 7vh);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  color: var(--muted);
+  /* 0.6vh gave 4px on the panel and the prompt sat on the rule. ~12px on M (853×720),
+     ~6px on S — the divider is this row's own border-bottom, so it stays closer to the
+     text above it than to the pane below (which gets ~19px). */
+  padding-bottom: min(1.7vh, 2.1vw);
+  border-bottom: 1px solid var(--line);
+}
+
+/* The other half of the same gap: ~9px on top of #root's 10px gap = ~19px below the rule
+   before the session text starts. Has to be margin, not padding — padding on #text would
+   scroll away with the content, and padding on #stack would stretch .sb (absolute against
+   it) past the pane it is measuring. Both panes get it: the eye sees one divider. */
+#stack, #card { margin-top: min(1.25vh, 1.6vw); }
+
+/* index/total cycle button — JS toggles display: none when there is nothing to cycle to.
+   Borrows .opt's button look (border/background/:active) so it reads as tappable. About
+   1.4x the size it was in the status bar: it is the only thing on this screen that is
+   tapped without a question on it, and it was being missed. */
+#cycle {
+  flex: none;
+  display: none;
+  border: 2px solid var(--line);
+  border-radius: min(0.8vh, 1vw);
+  background: rgba(255, 255, 255, 0.05);
+  padding: min(0.5vh, 0.6vw) min(1.1vw, 1.6vh);
+  margin: 0;
+  font: inherit;
+  font-size: min(3.6vw, 9vh);
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+#cycle:active { color: var(--text); background: var(--accent); border-color: var(--accent); }
+
+/* ---------- scroll bar (both modes, all three panes) ---------- */
+
+/* A real bar, because the faded edge only says "there is more", never how much or where.
+   Not ::-webkit-scrollbar: iCUE's Qt WebEngine draws nothing at all for a styled one
+   (proven on the real panel, v1.0.9). Sibling of the pane rather than a child, so the
+   pane's mask-image cannot fade out the indicator. syncBar() in index.html owns the
+   thumb's top/height and the display toggle. */
+.sb {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: min(0.5vw, 0.7vh);
+  min-width: 3px;
+  height: 100%;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.09);
+  display: none;
+  pointer-events: none;   /* the pane is scrolled by swiping it, never by dragging this */
+}
+.sb > i {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  border-radius: inherit;
+  background: var(--muted);
+}
+
+/* ---------- text mode ---------- */
+
+/* Only holds #text and its bar now — kept for the `position: relative` the bar needs. */
+#stack { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+#prompt {
+  flex: 1;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  /* 2.2vw gives ~19px on the M panel (853x720), which is unreadable from the chair - asked for 24px
+        2.8vw of 853 = 23.9px, 3.3vh of 720 = 23.8px, matching the request on both
+        written as vw/vh, not fixed px, because the S panel (853x360) must shrink with it or it overflows the card */
+  font-size: min(2.8vw, 3.3vh);
+  font-weight: 400;
+  letter-spacing: 0;
+  /* Not #sub's line-height: 1 — that exists so the chips sit on one baseline, and it left
+     a two-line prompt with no leading at all. Set here so #sub's own row is untouched. */
+  line-height: 1.25;
+  color: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+#text {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: min(1.6vw, 2.2vh);   /* the bar sits in this gutter */
+  font-size: min(2.9vw, 7.6vh);
+  line-height: 1.45;
+  font-weight: 400;
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* Native touch scrolling instead of a JS auto-scroller: the panel is already
+     a touchscreen, so a swipe is the cheapest possible scrollbar. Buttons are
+     gone, so panning is the only way to scroll — pin it explicitly. */
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+}
+#root.is-down #text { color: var(--muted); }
+
+/* ---------- Step Feed (both modes; JS hides it when the turn has no steps) ---------- */
+
+/* Same type size as #prompt: secondary to the answer text, still readable from a chair.
+   Its own divider on top so it never reads as the tail of the message above it. */
+#feed {
+  display: none;               /* JS: flex */
+  flex: none;
+  flex-direction: column;
+  gap: 0.2em;
+  padding-top: min(1.2vh, 1.5vw);
+  border-top: 1px solid var(--line);
+  /* ~20px on both S (853×360) and M (853×720): 3.3vh like #prompt gave 12px on S */
+  /* 2.4vw read too small on the real panel (2026-10-01); vh still caps it on S */
+  font-size: min(3.1vw, 5.5vh);
+  line-height: 1.2;
+  color: var(--muted);
+}
+.step { display: flex; gap: 0.5em; align-items: baseline; }
+.step .ic { flex: none; width: 1em; text-align: center; }
+.step .lb { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.step .tm { flex: none; font-variant-numeric: tabular-nums; }
+.step.is-run { color: var(--text); }
+.step.is-run .ic { color: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+
+/* ---------- question mode ---------- */
+
+/* The only scroll indicator this panel actually renders. iCUE's Qt WebEngine draws
+   nothing for a styled ::-webkit-scrollbar (proven on the real panel, v1.0.9) but has
+   drawn mask-image for many versions, so a faded edge is what says "more that way".
+   syncFade() in index.html owns both classes and sets them only when they change.
+   Unconditional fades would lie about where a message ends, so neither is default. */
+#text.has-more, #question.has-more, #options.has-more {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 1.2em), transparent);
+}
+/* Two lines deep at the top, one at the bottom: on the panel a 1.2em top fade dimmed
+   only the single clipped line and was too easy to miss from a chair. #options keeps the
+   shorter band -- one answer row is about 2em tall, so 2em would dim a whole button. */
+#text.has-above, #question.has-above, #options.has-above {
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--fade-top));
+}
+#text.has-above.has-more, #question.has-above.has-more, #options.has-above.has-more {
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--fade-top),
+                              #000 calc(100% - 1.2em), transparent);
+}
+#text, #question { --fade-top: 2em; }
+#options { --fade-top: 1.2em; }
+
+#card { display: none; flex: 1; min-height: 0; flex-direction: column; gap: min(1.4vh, 1.8vw); }
+/* The card is never shown any more (2026-10-01): the screen only alerts — the blinking
+   border and "ASK · header" in the bar — and the question itself is read in the app.
+   Text and Step Feed stay on screen while asking. */
+
+/* The question owns the card and the answers sit at its foot. It used to be the other
+   way round — `max-height: 2.6em; overflow: hidden` silently ate everything past two
+   lines while five stretched buttons took the whole slot. Wraps the question and its
+   scroll bar; the from-label moved up to #sub, which gave the question a little height
+   back. */
+#qtext {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Which session is asking — the left-hand cell of #sub in question mode, where #prompt
+   sits the rest of the time. Same row, same alignment, so the chips never move. */
+#qfrom {
+  display: none;
+  flex: 1;
+  min-width: 0;
+  /* The same size #prompt renders at, because it stands in the same slot: whichever of
+     the two is live, the row reads as one thing that changed its contents, not as a
+     different row. (It used to sit inside the card and be deliberately smaller than the
+     question -- up here it has nothing to be subordinate to.) */
+  font-size: min(2.8vw, 3.3vh);
+  font-weight: 500;
+  letter-spacing: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#question {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  font-size: min(3.4vw, 4.6vh);
+  font-weight: 600;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  word-break: break-word;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  /* Not the 1.2em the removed bottom fade needed — just enough that a mid-scroll line
+     does not sit flush against the first answer button and read as one block with it. */
+  padding-bottom: 0.4em;
+  padding-right: min(1.6vw, 2.2vh);   /* the bar sits in this gutter */
+}
+
+/* One row per answer, capped at a share of the card. Overflowing options scroll rather
+   than squeezing every button down to an unreadable sliver. The cap lives on the wrapper
+   (which the scroll bar needs anyway for `position: relative`) so #options itself is free
+   to be the plain scroller. */
+#optwrap {
+  position: relative;
+  flex: none;
+  max-height: 42%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+#options {
+  min-height: 0;
+  overflow-y: auto;
+  touch-action: pan-y;
+  display: flex;
+  flex-direction: column;
+  gap: min(0.8vw, 1.2vh);
+  padding-right: min(1.6vw, 2.2vh);   /* the bar sits in this gutter */
+}
+
+/* Read-only row now (ADR 0002) — no cursor/press affordance, tapping does nothing. */
+.opt {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 0.3em;
+  padding: min(1.4vh, 1.8vw) min(1.2vw, 2vh);
+  border: 2px solid var(--line);
+  border-radius: min(1.2vh, 1.6vw);
+  background: rgba(255, 255, 255, 0.05);
+  text-align: left;
+  color: inherit;
+  font: inherit;
+}
+
+.opt .lab {
+  font-size: min(2.7vw, 7vh);
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.opt .desc {
+  font-size: min(1.9vw, 5vh);
+  font-weight: 400;
+  line-height: 1.25;
+  color: var(--muted);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+/* Answer buttons only: label and description share one line so a button costs one row,
+   not a column of the card. */
+#options .opt {
+  flex: none;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 0.6em;
+  padding: min(1vh, 1.3vw) min(1.2vw, 2vh);
+}
+/* Floor on the type size, not just a ratio: the panel is 354 mm wide, so 2.7vw is about
+   3.2 mm of glyph — under that nothing is legible from a chair, which is the only place
+   this screen is ever read from. */
+#options .opt .lab { flex: none; font-size: min(2.7vw, 3.8vh); }
+#options .opt .desc {
+  flex: 1;
+  min-width: 0;
+  font-size: min(2.1vw, 3vh);
+  -webkit-line-clamp: 1;
+}
+
+/* Whole-widget alert while a question is waiting — this is the only thing that
+   has to catch the eye of someone looking at their game, not at this screen. */
+#root.is-asking::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: min(0.9vh, 1.2vw) solid var(--warn);
+  border-radius: min(1.2vh, 1.6vw);
+  pointer-events: none;
+  animation: alert 1.1s ease-in-out infinite;
+}
+@keyframes alert { 50% { opacity: 0.15; } }
+
+/* Short wide slots (one dashboard slot is roughly 2.4:1): the card has barely 150 px
+   of options room, so the descriptions are the first thing to go — the labels alone
+   still answer the question. The query is on aspect, not px, because the panel's
+   device pixel ratio is not something the widget can see, and the ratio survives it. */
+@media (min-aspect-ratio: 2/1) {
+  #optwrap { max-height: 50%; }
+  #options .opt { justify-content: center; }
+  #options .opt .desc { display: none; }
+  #question { font-size: min(2.6vw, 7vh); }
+}
+
+/* Tall narrow slots: the session title is the least important thing in the bar and it
+   crowds the countdown, which is not — and an answer row has no width left to put the
+   description beside the label, so it goes back under it. */
+@media (max-aspect-ratio: 3/4) {
+  #title { display: none; }
+  #text { font-size: min(5.5vw, 4vh); }
+  #bar, #sub, #ctx { font-size: min(4.5vw, 3.4vh); }
+  #cycle { font-size: min(6vw, 4.4vh); }
+  #question { font-size: min(6vw, 4.4vh); }
+  #options .opt { flex-direction: column; align-items: flex-start; gap: 0.2em; }
+  #options .opt .lab { font-size: min(5vw, 3.6vh); }
+  #options .opt .desc { font-size: min(3.6vw, 2.6vh); -webkit-line-clamp: 2; }
+}

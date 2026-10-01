@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWindowsForms>false</UseWindowsForms>
+    <RootNamespace>ClaudeEdgeBridge</RootNamespace>
+    <AssemblyName>ClaudeEdgeBridge</AssemblyName>
+    <Version>1.0.3</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- bridge/Shared/ holds files copied from claude-meter-for-windows; see the header in each file -->
+  </ItemGroup>
+
+</Project>
+
