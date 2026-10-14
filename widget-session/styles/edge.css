@@ -466,6 +466,23 @@ html, body {
 }
 @keyframes alert { 50% { opacity: 0.15; } }
 
+/* Waiting Banner: same animation and timing as the border above so the two blink in sync.
+   flex: none, so it is #stack (min-height: 0) that shrinks, never the banner. */
+#warn {
+  display: none;
+  flex: none;
+  padding: min(0.8vh, 1vw) min(1.4vw, 2vh);
+  border-radius: min(0.8vh, 1vw);
+  background: var(--warn);   /* same amber as the blinking border; a dark user accent would hide black text */
+  color: #000;
+  font-weight: 700;
+  line-height: 1.15;
+  margin-top: min(0.8vh, 1vw);   /* sits between #stack and #feed, under the message */
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: min(5.2vw, 14vh); letter-spacing: 0.04em;
+}
+#root.is-asking #warn { display: block; animation: alert 1.1s ease-in-out infinite; }
+
 /* Short wide slots (one dashboard slot is roughly 2.4:1): the card has barely 150 px
    of options room, so the descriptions are the first thing to go — the labels alone
    still answer the question. The query is on aspect, not px, because the panel's
@@ -475,6 +492,7 @@ html, body {
   #options .opt { justify-content: center; }
   #options .opt .desc { display: none; }
   #question { font-size: min(2.6vw, 7vh); }
+  #warn { font-size: min(4vw, 10vh); }
 }
 
 /* Tall narrow slots: the session title is the least important thing in the bar and it
@@ -485,6 +503,7 @@ html, body {
   #text { font-size: min(5.5vw, 4vh); }
   #bar, #sub, #ctx { font-size: min(4.5vw, 3.4vh); }
   #cycle { font-size: min(6vw, 4.4vh); }
+  #warn { font-size: min(6.5vw, 6.8vh); }
   #question { font-size: min(6vw, 4.4vh); }
   #options .opt { flex-direction: column; align-items: flex-start; gap: 0.2em; }
   #options .opt .lab { font-size: min(5vw, 3.6vh); }

@@ -19,7 +19,8 @@ Runs inside iCUE on the XENEON EDGE dashboard:
 - Polls bridge every 1.5 seconds for session state
 - Renders prompt, reply, status, model, context gauge, and usage
 - Cycles through active sessions (2+ sessions show a cycle button)
-- Shows question alerts (blinking border + "ASK" header; read-only; answer in Claude Desktop)
+- Shows question alerts (blinking border + "WAITING FOR YOU" banner; read-only; answer in Claude Desktop)
+- Optional Auto-cycle: every N seconds requests the next working session via `?session=` (paused by a pending question, a pin, or a recent touch)
 
 Configurable: bridge port, session title visibility, gauge color mode, text/background/accent colors, transparency.
 

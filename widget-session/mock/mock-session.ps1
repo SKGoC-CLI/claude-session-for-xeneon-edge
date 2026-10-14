@@ -179,7 +179,7 @@ $multiSessions = @(
     }
     [ordered]@{
         id = 'multi-session-ccc'; project = 'project-gamma'; title = 'Session C - docs'
-        status = 'waiting'; activity = $null
+        status = 'working'; activity = 'Write'   # 2 working sessions, so auto-cycle has something to rotate
         text = 'SPEC.md has been updated'
         prompt = 'Please update the spec'
         model = 'claude-haiku-4-5'; effort = $null; minutesAgo = 15; ctx = 185000; win = 200000

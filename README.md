@@ -9,24 +9,25 @@ Shows your live Claude Code session on the CORSAIR XENEON EDGE 14.5" touchscreen
 - **Session status** — shows "working" while Claude is thinking or running a tool, and "waiting" when Claude is idle
 - **Working-thinking indicator** — displays elapsed time in the session, and flags when Claude is in extended thinking
 - **Model and effort** — current model name and effort level (low/high/max/etc.)
-- **Step Feed** — the last 5 tool calls of the current turn (e.g., "Read config.json", "Run tests"), with elapsed time per step
+- **Step Feed** — the latest tool call of the current turn (e.g., "Read config.json", "Run tests"), with its elapsed time
 - **Context window gauge** — a fill bar showing how full the context window is for the current session's model
 - **5-hour and 7-day usage** — your Claude usage in the current 5-hour window and 7-day window, as percentages
-- **Question alert** — when Claude asks a question (via `AskUserQuestion` or `ExitPlanMode`), the widget shows a blinking border and "ASK" header to flag your attention; the question text and options are read-only on the EDGE (you answer it in Claude Code / Claude Desktop)
-- **Multi-session support** — when 2 or more sessions are active, a cycle button (◀ X/Y ▶) lets you switch between them; the selected session is pinned for 60 seconds
+- **Question alert** — when Claude asks a question (via `AskUserQuestion` or `ExitPlanMode`), the widget shows a blinking border and a large blinking **⚠ WAITING FOR YOU** banner, readable from the corner of your eye; the session with the question always takes the screen. You answer it in Claude Code / Claude Desktop
+- **Multi-session support** — when 2 or more sessions are active, a cycle button (X/Y ▶) lets you switch between them; tapping it (or touching the text) holds that session for 60 seconds
+- **Auto-cycle** — optional: rotate through the sessions that are currently working every 5, 10, 15, 30 or 60 seconds (off by default; set it in the widget's iCUE settings). It pauses while a question is pending or while you are reading
 - **Session title** — optionally shows your custom session title (configurable in iCUE)
 
 ## Screenshots
 
 The Claude widget (center) on a real XENEON EDGE, next to other iCUE widgets.
 
-Your turn — Claude has finished and is waiting for you:
+A question is pending — blinking border and the WAITING FOR YOU banner (v1.1.0):
+
+![Claude widget showing the WAITING FOR YOU banner on the XENEON EDGE](docs/screenshot-waiting.png)
+
+Your turn — Claude has finished and is waiting for you (v1.0.0, which still listed the last 5 steps):
 
 ![Claude widget showing YOUR TURN on the XENEON EDGE](docs/screenshot-your-turn.png)
-
-A question is pending — orange blinking border and "ASK" header:
-
-![Claude widget showing a pending question with the ASK alert](docs/screenshot-ask.png)
 
 ## Requirements
 

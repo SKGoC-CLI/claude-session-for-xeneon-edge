@@ -1,4 +1,4 @@
-// Copied from https://github.com/SKGoC-CLI/claude-meter-for-windows (MIT) at v1.9.1 - do not edit here; change it upstream.
+// Copied from https://github.com/SKGoC-CLI/claude-meter-for-windows (MIT) at v1.10.0 - do not edit here; change it upstream.
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;

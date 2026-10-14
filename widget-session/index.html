@@ -22,6 +22,14 @@
 >
 <meta
   name="x-icue-property"
+  content="autoCycle"
+  data-label="tr('Auto-cycle Working Sessions')"
+  data-type="combobox"
+  data-values="[{'key':'0','value':tr('Off')},{'key':'5','value':tr('Every 5 s')},{'key':'10','value':tr('Every 10 s')},{'key':'15','value':tr('Every 15 s')},{'key':'30','value':tr('Every 30 s')},{'key':'60','value':tr('Every 60 s')}]"
+  data-default="'0'"
+>
+<meta
+  name="x-icue-property"
   content="gaugeMode"
   data-label="tr('Context Gauge Color')"
   data-type="combobox"
@@ -72,7 +80,7 @@
 [
   {
     "title": "tr('Claude Session Settings')",
-    "properties": ["bridgePort", "showTitle", "gaugeMode", "gaugeColor", "themeAccent", "themeText", "themeBg", "themeOpacity"],
+    "properties": ["bridgePort", "showTitle", "autoCycle", "gaugeMode", "gaugeColor", "themeAccent", "themeText", "themeBg", "themeOpacity"],
     "info": "`Needs ClaudeEdgeBridge running on this PC. Shows a pending question so you know to answer it in the app.`"
   }
 ]
@@ -89,6 +97,8 @@
     <span id="clock"></span>
     <span id="title"></span>
   </div>
+  <!-- Waiting Banner: shown only under .is-asking (see edge.css) and blinking in sync with
+       the border; "ask" in the bar alone was too easy to miss from a chair. -->
   <!-- Context Fill (see CONTEXT.md): how full the shown session's context window is.
        Its own row, every mode — hidden by JS until the bridge has a number for it. -->
   <div id="ctx">
@@ -123,6 +133,7 @@
   <!-- Step Feed (see CONTEXT.md): the current turn's last few tool calls, plus a
        "thinking" row while nothing is running. Outside #stack/#card so it survives both
        modes; rows are built once and only their text changes. -->
+  <div id="warn">⚠ WAITING FOR YOU</div>
   <div id="feed"></div>
 </div>
 
@@ -134,7 +145,7 @@
 var POLL_MS = 1500;       // a question has to appear on screen promptly
 var BEAT_MS = 5000;       // bridge treats us as gone after 15 s of silence
 var TICK_MS = 1000;
-var PIN_MS = 60000;       // how long a manually-cycled session stays on screen
+var PIN_MS = 60000;      // how long a manually-cycled session stays on screen
 
 var root = document.getElementById("root");
 var dot = document.getElementById("dot");
@@ -148,13 +159,12 @@ var ctxFillEl = document.getElementById("ctxbar").firstChild;
 var cycleEl = document.getElementById("cycle");
 var textEl = document.getElementById("text");
 var promptEl = document.getElementById("prompt");
-var qfromEl = document.getElementById("qfrom");
+var qfromEl =document.getElementById("qfrom");
 var questionEl = document.getElementById("question");
 var optionsEl = document.getElementById("options");
 var feedEl = document.getElementById("feed");
-var FEED_ROWS = 5;
+var FEED_ROWS = 1;
 var feedRows = [];
-var shortSlot = window.matchMedia("(min-aspect-ratio: 2/1)");   // same query as edge.css
 for (var fi = 0; fi < FEED_ROWS; fi++) {
   var row = document.createElement("div");
   row.className = "step";
@@ -172,9 +182,14 @@ var appliedSeq = 0;
 
 var selectedSessionId = null; // null = auto (follow whichever session the bridge picks)
 var pinUntil = 0;             // Date.now() ms; past this, a cycled selection reverts to auto
+// The session Auto-cycle has put on screen. Separate from selectedSessionId on purpose: it
+// never pins, never gets is-pinned, and a manual tap (which pins) takes priority over it.
+var autoSessionId = null;
+var lastCycleAt = 0;          // Date.now() ms of the last Auto-cycle step
+var lastTouchAt = 0;         // Date.now() ms of the last finger on #text; holds Auto-cycle
 
 var cfg = { port: "8975", showTitle: true, accent: "#e8630a", text: "#ffffff", bg: "#000000", opacity: 0.8,
-            gaugeMode: "gradient", gaugeColor: "#5fd97b" };
+            gaugeMode: "gradient", gaugeColor: "#5fd97b", autoCycle: 0 };
 
 function readSettings() {
   if (typeof bridgePort !== "undefined" && bridgePort) cfg.port = String(bridgePort);
@@ -183,6 +198,15 @@ function readSettings() {
   var override = /[?&]port=(\d+)/.exec(location.search);
   if (override) cfg.port = override[1];
   if (typeof showTitle !== "undefined") cfg.showTitle = !!showTitle;
+  // seconds between steps, 0 = off. Number(true) is 1 — a value saved by the 1.0.23 switch
+  // must not turn into a 1-second spin, so anything that is not a menu value reads as off
+  if (typeof autoCycle !== "undefined") {
+    var secs = Number(autoCycle);
+    cfg.autoCycle = (secs === 5 || secs === 10 || secs === 15 || secs === 30 || secs === 60) ? secs : 0;
+  }
+  var cyc = /[?&]cycle=(\d+)/.exec(location.search);   // dev loop only, like port=
+  if (cyc) cfg.autoCycle = Number(cyc[1]);
+  if (!cfg.autoCycle) autoSessionId = null;
   // themeAccent etc., not accentColor/textColor/backgroundColor/transparency: iCUE treats those
   // four names as its own Personalization set and hides them behind the Custom Style switch
   // no matter which group they are declared in (seen on the panel, v1.0.16).
@@ -281,7 +305,13 @@ function renderBar(q) {
   else if (latest && latest.ok) cls.push("is-waiting");
   if (selectedSessionId) cls.push("is-pinned");
   var cls2 = cls.join(" ");
-  if (root.className !== cls2) root.className = cls2;
+  if (root.className !== cls2) {
+    var bannerFlip = root.classList.contains("is-asking") !== !!q;
+    root.className = cls2;
+    // the Waiting Banner just took or gave back a row of #stack: re-pin the text to its
+    // newest line, or the bottom of the message is left under the fold until it next changes
+    if (bannerFlip) { textEl.scrollTop = textEl.scrollHeight; syncFade(textEl); }
+  }
 
   renderCycle();
 
@@ -354,8 +384,7 @@ function renderFeed() {
   if (latest && latest.ok && latest.status === "working" && !latest.question && !runningStep() && latest.quiet_since) {
     items.push({ ic: "▶", lb: "thinking", tm: dur(now() - latest.quiet_since), cls: "step is-run" });
   }
-  // a short wide slot (S, 853×360) has ~110px left for the message at 5 rows — keep 3
-  items = items.slice(-(shortSlot.matches ? 3 : FEED_ROWS));
+  items = items.slice(-FEED_ROWS);
   var show = items.length ? "flex" : "none";
   if (feedEl.style.display !== show) feedEl.style.display = show;
   for (var r = 0; r < FEED_ROWS; r++) {
@@ -410,7 +439,9 @@ function renderCycle() {
   // where #cycle is display:none, and the button would never appear
   if (cycleEl.style.display !== "inline-block") cycleEl.style.display = "inline-block";
 
-  var currentId = selectedSessionId || (latest && latest.session_id);
+  // a pending question overrides both ids on the bridge side, so count from what is shown
+  var currentId = (latest && latest.question) ? latest.session_id
+    : (selectedSessionId || autoSessionId || (latest && latest.session_id));
   var idx = 0;
   for (var i = 0; i < sessions.length; i++) {
     if (sessions[i].id === currentId) { idx = i; break; }
@@ -421,7 +452,9 @@ function renderCycle() {
 function cycleSession() {
   var sessions = (latest && latest.sessions) || [];
   if (sessions.length < 2) return;
-  var currentId = selectedSessionId || (latest && latest.session_id);
+  // a pending question overrides both ids on the bridge side, so count from what is shown
+  var currentId = (latest && latest.question) ? latest.session_id
+    : (selectedSessionId || autoSessionId || (latest && latest.session_id));
   var idx = -1;
   for (var i = 0; i < sessions.length; i++) {
     if (sessions[i].id === currentId) { idx = i; break; }
@@ -528,6 +561,11 @@ questionEl._sb = document.getElementById("sb-question");
 optionsEl._sb = document.getElementById("sb-options");
 
 textEl.addEventListener("scroll", function () { restartPin(); scheduleFade(textEl); });
+// a finger on the text pauses Auto-cycle the way a pin would, without being a pin.
+// touch/pointer, not scroll: render() writes scrollTop itself, and that fires `scroll` too
+function touched() { lastTouchAt = Date.now(); }
+textEl.addEventListener("touchstart", touched);
+textEl.addEventListener("pointerdown", touched);
 questionEl.addEventListener("scroll", function () { scheduleFade(questionEl); });
 optionsEl.addEventListener("scroll", function () { scheduleFade(optionsEl); });
 cycleEl.addEventListener("click", cycleSession);
@@ -536,7 +574,8 @@ function poll() {
   pollSeq++;
   var seq = pollSeq;
   var url = base() + "/session.json";
-  if (selectedSessionId) url += "?session=" + encodeURIComponent(selectedSessionId);
+  var wantId = selectedSessionId || autoSessionId;
+  if (wantId) url += "?session=" + encodeURIComponent(wantId);
   fetch(url, { cache: "no-store" })
     .then(function (r) {
       if (!r.ok) throw new Error("HTTP " + r.status);
@@ -548,6 +587,7 @@ function poll() {
       appliedSeq = seq;
       latest = data; reachable = true;
       if (selectedSessionId && !pinnedSessionStillActive()) { selectedSessionId = null; pinUntil = 0; }
+      if (autoSessionId && !workingSession(autoSessionId)) autoSessionId = null;
       render();
     })
     .catch(function () {
@@ -555,6 +595,35 @@ function poll() {
       appliedSeq = seq;
       reachable = false; render();
     });
+}
+
+function workingSession(id) {
+  var ss = (latest && latest.sessions) || [];
+  for (var i = 0; i < ss.length; i++) if (ss[i].id === id) return ss[i].status === "working";
+  return false;
+}
+
+// Auto-cycle: every cfg.autoCycle seconds put the next working session on screen. Runs on a
+// 1 s tick so a changed setting takes effect without restarting a timer. Holds still while a
+// manual pin is live (selectedSessionId) or a question is pending (the bridge already forces
+// the asking session onto the screen).
+function autoCycleTick() {
+  if (!cfg.autoCycle || !reachable || !latest) { autoSessionId = null; return; }
+  if (selectedSessionId || latest.question) return;
+  if (Date.now() - lastTouchAt < PIN_MS) return;   // reading a long answer by swiping: hold still
+  if (Date.now() - lastCycleAt < cfg.autoCycle * 1000) return;
+  lastCycleAt = Date.now();
+  var working = [];
+  var ss = latest.sessions || [];
+  for (var i = 0; i < ss.length; i++) if (ss[i].status === "working") working.push(ss[i]);
+  if (!working.length) { autoSessionId = null; return; }   // the bridge's own winner shows
+  var cur = autoSessionId || latest.session_id;
+  var idx = -1;
+  for (var j = 0; j < working.length; j++) if (working[j].id === cur) { idx = j; break; }
+  var nxt = working[(idx + 1) % working.length].id;   // idx -1 -> working[0]
+  if (nxt === autoSessionId) return;   // one working session: already on it, no extra request
+  autoSessionId = nxt;
+  poll();
 }
 
 function beat() { post("/heartbeat", {}); }
@@ -594,6 +663,7 @@ poll();
 beat();
 setInterval(poll, POLL_MS);
 setInterval(beat, BEAT_MS);
+setInterval(autoCycleTick, TICK_MS);
 setInterval(render, TICK_MS);   // keeps the question countdown moving
 </script>
 </body>

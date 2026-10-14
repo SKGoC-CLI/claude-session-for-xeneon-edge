@@ -1,4 +1,4 @@
-// Copied from https://github.com/SKGoC-CLI/claude-meter-for-windows (MIT) at v1.9.1 - do not edit here; change it upstream.
+// Copied from https://github.com/SKGoC-CLI/claude-meter-for-windows (MIT) at v1.10.0 - do not edit here; change it upstream.
 using System.Globalization;
 using System.Net;
 using System.Net.Http;
@@ -161,9 +161,28 @@ sealed class UsageClient
                     usedDollars, limitDollars));
         }
 
+        // "Cloud credit": included credit for cloud sessions. Not in the limits array.
+        // Codename field, matched by name only on purpose (decided in grilling 2026-10-02;
+        // if renamed, the row just disappears — fix the one name).
+        try
+        {
+            if (root["iguana_necktie"] is JsonObject cc
+                && cc["limit_dollars"]?.GetValue<double>() is > 0 and var ccLimit
+                && cc["used_dollars"]?.GetValue<double>() is { } ccUsed)
+            {
+                double ccUtil = cc["utilization"]?.GetValue<double>() ?? ccUsed / ccLimit * 100;
+                windows.Add(new UsageWindow("cloud_credit", "Cloud credit", ccUtil,
+                    ParseResetTime(cc["resets_at"]), false, "normal", ccUsed, ccLimit));
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or FormatException)
+        {
+            // undocumented field changed type — lose the cloud row, never the whole poll
+        }
+
         // Session first, plain weekly second, model-scoped after, wallet last.
         return windows
-            .OrderBy(w => w.Key switch { "five_hour" => 0, "seven_day" => 1, "extra_usage" => 8, _ => 2 })
+            .OrderBy(w => w.Key switch { "five_hour" => 0, "seven_day" => 1, "extra_usage" => 8, "cloud_credit" => 9, _ => 2 })
             .ThenBy(w => w.Label, StringComparer.Ordinal)
             .ToList();
     }

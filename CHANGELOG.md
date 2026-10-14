@@ -5,6 +5,21 @@ All notable changes to Claude Session for XENEON EDGE are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-10-15
+
+### Added
+
+- **Waiting Banner** — a large blinking "⚠ WAITING FOR YOU" banner above the step line whenever Claude has a pending question, so it is obvious from the corner of your eye.
+- **Auto-cycle** — new iCUE setting *Auto-cycle Working Sessions*: Off (default) / every 5, 10, 15, 30 or 60 seconds. Rotates only through sessions that are working, pauses while a question is pending, while a session is pinned, and for 60 seconds after you touch the text.
+
+### Changed
+
+- **Step Feed** shows only the latest step (was the last 5), giving Claude's reply more room.
+
+### Notes
+
+- The bridge (`ClaudeEdgeBridge.exe`) behaves the same as in 1.0.0; it was rebuilt so the binary matches the source (shared files now from claude-meter-for-windows v1.10.0, which adds a usage row this widget does not show). Upgrading: run `Install.cmd` again, then import the new `.icuewidget` in iCUE.
+
 ## [1.0.0] - 2026-10-01
 
 ### Added
@@ -25,4 +40,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 This is the first public release of Claude Session for XENEON EDGE, providing live session monitoring on your CORSAIR XENEON EDGE touchscreen without interrupting your main workflow.
 
+[1.1.0]: https://github.com/SKGoC-CLI/claude-session-for-xeneon-edge/releases/tag/v1.1.0
 [1.0.0]: https://github.com/SKGoC-CLI/claude-session-for-xeneon-edge/releases/tag/v1.0.0
