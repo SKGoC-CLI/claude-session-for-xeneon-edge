@@ -316,6 +316,22 @@ static class Program
             ["sessions"] = sessions,
             ["steps"] = BuildStepsJson(tail),
             ["quiet_since"] = tail?.QuietSince?.ToUnixTimeSeconds(),
+            ["goal"] = BuildGoalJson(tail),
+        };
+    }
+
+    // Goal Progress row (see CONTEXT.md); null = the session has no unfinished step list
+    static JsonObject? BuildGoalJson(TailInfo? tail)
+    {
+        if (tail is null) return null;
+        var path = Path.Combine(SessionTailer.ProjectsRoot, tail.Project, tail.SessionId + ".jsonl");
+        if (GoalReader.Read(path, tail.Cwd) is not { } goal) return null;
+        return new JsonObject
+        {
+            ["done"] = goal.Done,
+            ["total"] = goal.Total,
+            ["current"] = goal.Current,
+            ["marks"] = goal.Marks,
         };
     }
 
@@ -452,6 +468,7 @@ static class Program
         await RunPromptSelfTestAsync(failures);
         await RunMultiSessionSelfTestAsync(failures);
         await RunAskSelfTestAsync(failures);
+        await RunGoalSelfTestAsync(failures);
 
         listener.Stop();
 
@@ -1409,6 +1426,75 @@ static class Program
         {
             SessionTailer.ResetCacheForTest();
             try { Directory.Delete(multiRoot, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    // Goal Progress: a step list replayed from update_plan calls, then the NEXT-SESSION.md fallback
+    static async Task RunGoalSelfTestAsync(List<string> failures)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ClaudeEdgeBridgeSelfTest-" + Guid.NewGuid());
+        var project = Path.Combine(root, "test-project");
+        var work = Path.Combine(root, "work"); // the session's cwd, outside the projects tree
+        Directory.CreateDirectory(project);
+        Directory.CreateDirectory(work);
+        var noBom = new UTF8Encoding(false);
+        string Ts(int minutesAgo) => DateTimeOffset.UtcNow.AddMinutes(-minutesAgo).ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
+        string Plan(string input) =>
+            """{"type":"assistant","timestamp":"TS","message":{"role":"assistant","content":[{"type":"tool_use","id":"ID","name":"mcp__ccd_turn__update_plan","input":INPUT}]}}"""
+                .Replace("TS", Ts(1)).Replace("ID", "toolu_" + Guid.NewGuid().ToString("N")).Replace("INPUT", input);
+
+        async Task<JsonNode?> FetchGoal()
+        {
+            SessionTailer.ResetCacheForTest();
+            using var http = new HttpClient();
+            using var response = await http.GetAsync($"http://127.0.0.1:{Port}/session.json");
+            return JsonNode.Parse(await response.Content.ReadAsStringAsync())?["goal"];
+        }
+
+        try
+        {
+            var cwdJson = JsonSerializer.Serialize(work);
+            var path = Path.Combine(project, Guid.NewGuid() + ".jsonl");
+            File.WriteAllLines(path, new[]
+            {
+                """{"type":"user","promptSource":"user","cwd":CWD,"timestamp":"TS","message":{"role":"user","content":"Plan it"}}""".Replace("CWD", cwdJson).Replace("TS", Ts(2)),
+                Plan("""{"items":[{"content":"Read the **spec**","status":"in_progress"},{"content":"Write it","status":"pending"},{"content":"Ship it","status":"pending"}]}"""),
+                Plan("""{"advance":true}"""),
+                Plan("""{"start":"2"}"""), // wrong JSON kind: must be skipped, not 500 the endpoint
+            }, noBom);
+            SessionTailer.ProjectsRoot = root;
+
+            var g = await FetchGoal();
+            if (g?["done"]?.GetValue<int>() != 1 || g?["total"]?.GetValue<int>() != 3 || g?["current"]?.GetValue<string>() != "Write it"
+                || g?["marks"]?.GetValue<string>() != "dcp")
+                failures.Add($"goal after items + advance should be 1/3 'Write it' marks dcp, was {g?.ToJsonString() ?? "null"}");
+
+            // a finished list is hidden, and an active NEXT-SESSION.md in the cwd takes over
+            File.AppendAllLines(path, new[] { Plan("""{"done":[2,3]}""") }, noBom);
+            File.WriteAllLines(Path.Combine(work, "NEXT-SESSION.md"), new[]
+            {
+                "# NEXT-SESSION", "", "status: active", "",
+                "| Step | Task | Status |", "|---|---|---|",
+                "| 1 | Parse `plan` | ✅ |", "| 2 | **Draw** the row | ⬜ |", "| 3 | Pack widget | ⬜ |",
+            }, noBom);
+            g = await FetchGoal();
+            if (g?["done"]?.GetValue<int>() != 1 || g?["total"]?.GetValue<int>() != 3 || g?["current"]?.GetValue<string>() != "Draw the row"
+                || g?["marks"]?.GetValue<string>() != "dcp")
+                failures.Add($"finished list + active NEXT-SESSION.md should be 1/3 'Draw the row' marks dcp, was {g?.ToJsonString() ?? "null"}");
+
+            File.WriteAllText(Path.Combine(work, "NEXT-SESSION.md"), "status: done\n| 1 | a | ✅ |\n", noBom);
+            g = await FetchGoal();
+            if (g is not null)
+                failures.Add($"no unfinished list anywhere should give goal null, was {g.ToJsonString()}");
+        }
+        catch (Exception ex)
+        {
+            failures.Add($"goal self-test failed: {ex.Message}");
+        }
+        finally
+        {
+            SessionTailer.ResetCacheForTest();
+            try { Directory.Delete(root, recursive: true); } catch { /* best effort */ }
         }
     }
 }

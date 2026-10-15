@@ -155,6 +155,47 @@ html, body {
   transition: width 0.6s ease;
 }
 
+/* ---------- Goal Progress row (both modes; JS shows it only while a step list is unfinished) ---------- */
+
+/* Same type and rhythm as #ctx right above it, so the two read as one block of gauges.
+   One dot per step instead of a bar: green = done, orange blinking = the step under way,
+   grey = not started. Fixed colours, not the accent, so the meaning survives any theme. */
+#goal {
+  display: none;               /* JS: flex */
+  align-items: center;
+  gap: min(1.4vw, 2.4vh);
+  flex: none;
+  font-size: min(2.6vw, 7vh);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  line-height: 1.15;           /* not 1: Thai vowels above/below the line would be clipped */
+  color: var(--muted);
+}
+#goallab { flex: none; font-variant-numeric: tabular-nums; }
+#goaldots { flex: none; display: flex; align-items: center; gap: 0.35em; }
+#goaldots > i {
+  display: block;
+  width: 0.6em;
+  height: 0.6em;
+  min-width: 6px;
+  min-height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.28);
+}
+#goaldots > i.is-done { background: var(--live); }
+#goaldots > i.is-run { background: #ff8c1a; animation: pulse 1.4s ease-in-out infinite; }
+#goalname {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ---------- second row: context on the left, chips pinned right (both modes) ---------- */
 
 /* Always on screen, even with nothing on its left — the chips are what the eye goes
@@ -501,7 +542,7 @@ html, body {
 @media (max-aspect-ratio: 3/4) {
   #title { display: none; }
   #text { font-size: min(5.5vw, 4vh); }
-  #bar, #sub, #ctx { font-size: min(4.5vw, 3.4vh); }
+  #bar, #sub, #ctx, #goal { font-size: min(4.5vw, 3.4vh); }
   #cycle { font-size: min(6vw, 4.4vh); }
   #warn { font-size: min(6.5vw, 6.8vh); }
   #question { font-size: min(6vw, 4.4vh); }

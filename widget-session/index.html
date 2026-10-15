@@ -22,6 +22,13 @@
 >
 <meta
   name="x-icue-property"
+  content="showGoal"
+  data-label="tr('Show Step Progress')"
+  data-type="switch"
+  data-default="true"
+>
+<meta
+  name="x-icue-property"
   content="autoCycle"
   data-label="tr('Auto-cycle Working Sessions')"
   data-type="combobox"
@@ -80,7 +87,7 @@
 [
   {
     "title": "tr('Claude Session Settings')",
-    "properties": ["bridgePort", "showTitle", "autoCycle", "gaugeMode", "gaugeColor", "themeAccent", "themeText", "themeBg", "themeOpacity"],
+    "properties": ["bridgePort", "showTitle", "showGoal", "autoCycle", "gaugeMode", "gaugeColor", "themeAccent", "themeText", "themeBg", "themeOpacity"],
     "info": "`Needs ClaudeEdgeBridge running on this PC. Shows a pending question so you know to answer it in the app.`"
   }
 ]
@@ -105,6 +112,14 @@
     <span id="ctxlab">context</span>
     <i id="ctxbar"><i></i></i>
     <span id="ctxval"></span>
+  </div>
+  <!-- Goal Progress (see CONTEXT.md): steps done of the session's step list and the one
+       being worked on, right under the context gauge. Hidden by JS when there is no
+       unfinished list (or Show Step Progress is off). -->
+  <div id="goal">
+    <span id="goallab"></span>
+    <span id="goaldots"></span>
+    <span id="goalname"></span>
   </div>
   <!-- Second row, always on screen: whatever context the current mode has on the left
        (the user's prompt, or the question's `from` label), and the model/cycle chips
@@ -156,6 +171,10 @@ var modelEl = document.getElementById("model");
 var ctxEl = document.getElementById("ctx");
 var ctxValEl = document.getElementById("ctxval");
 var ctxFillEl = document.getElementById("ctxbar").firstChild;
+var goalEl = document.getElementById("goal");
+var goalLabEl = document.getElementById("goallab");
+var goalDotsEl = document.getElementById("goaldots");
+var goalNameEl = document.getElementById("goalname");
 var cycleEl = document.getElementById("cycle");
 var textEl = document.getElementById("text");
 var promptEl = document.getElementById("prompt");
@@ -188,7 +207,7 @@ var autoSessionId = null;
 var lastCycleAt = 0;          // Date.now() ms of the last Auto-cycle step
 var lastTouchAt = 0;         // Date.now() ms of the last finger on #text; holds Auto-cycle
 
-var cfg = { port: "8975", showTitle: true, accent: "#e8630a", text: "#ffffff", bg: "#000000", opacity: 0.8,
+var cfg = { port: "8975", showTitle: true, showGoal: true, accent: "#e8630a", text: "#ffffff", bg: "#000000", opacity: 0.8,
             gaugeMode: "gradient", gaugeColor: "#5fd97b", autoCycle: 0 };
 
 function readSettings() {
@@ -198,6 +217,7 @@ function readSettings() {
   var override = /[?&]port=(\d+)/.exec(location.search);
   if (override) cfg.port = override[1];
   if (typeof showTitle !== "undefined") cfg.showTitle = !!showTitle;
+  if (typeof showGoal !== "undefined") cfg.showGoal = !!showGoal;
   // seconds between steps, 0 = off. Number(true) is 1 — a value saved by the 1.0.23 switch
   // must not turn into a 1-second spin, so anything that is not a menu value reads as off
   if (typeof autoCycle !== "undefined") {
@@ -345,6 +365,7 @@ function renderBar(q) {
     ? (shortModel(latest.model) + (latest.effort ? (" · " + latest.effort) : ""))
     : "");
   renderContext();
+  renderGoal();
 }
 
 // 83 -> "1:23"; clamped at 0 so a clock a second ahead of the transcript never shows "-0:01"
@@ -425,6 +446,34 @@ function renderContext() {
          : "hsl(" + Math.round(120 * (1 - pct / 100)) + ", 80%, 50%)";
   if (ctxFillEl.style.width !== w) ctxFillEl.style.width = w;
   if (ctxFillEl._bg !== bg) { ctxFillEl._bg = bg; ctxFillEl.style.background = bg; }
+}
+
+// Goal Progress row: "STEP 3/6", one dot per step (green done, orange blinking current,
+// grey not started), then the step being worked on.
+// Hidden, not "0/0", when the session has no unfinished step list. Guarded writes like
+// renderContext(): this runs once a second and iCUE repaints for every DOM mutation.
+function renderGoal() {
+  var g = (cfg.showGoal && reachable && latest && latest.ok) ? latest.goal : null;
+  var show = (g && g.total > 0) ? "flex" : "none";
+  if (goalEl.style.display !== show) goalEl.style.display = show;
+  if (show === "none") return;
+  // an older bridge sends no marks: rebuild them from done/total
+  var marks = g.marks || "";
+  if (marks.length !== g.total) {
+    marks = "";
+    for (var m = 0; m < g.total; m++) marks += m < g.done ? "d" : m === g.done ? "c" : "p";
+  }
+  // the step being worked on, 1-based — "3/6" while the third is running, as in Claude Meter
+  var cur = marks.indexOf("c");
+  setText(goalLabEl, "step " + (cur >= 0 ? cur + 1 : Math.min(g.done + 1, g.total)) + "/" + g.total);
+  setText(goalNameEl, g.current || "");
+  // dots are only added/removed when the step count changes; otherwise just their class
+  while (goalDotsEl.childNodes.length < marks.length) goalDotsEl.appendChild(document.createElement("i"));
+  while (goalDotsEl.childNodes.length > marks.length) goalDotsEl.removeChild(goalDotsEl.lastChild);
+  for (var k = 0; k < marks.length; k++) {
+    var cls = marks[k] === "d" ? "is-done" : marks[k] === "c" ? "is-run" : "";
+    if (goalDotsEl.childNodes[k].className !== cls) goalDotsEl.childNodes[k].className = cls;
+  }
 }
 
 // "2/3 ▶" — index of the session currently on screen (pinned or, if none, the auto winner)

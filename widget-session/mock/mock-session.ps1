@@ -93,10 +93,12 @@ function Scene($name) {
             [ordered]@{ name = 'Bash'; label = 'Build bridge and run the self-test with a very long description that must ellipsize'; start = $now - 12; end = $null }
         )
         quiet_since = $now - 12
+        # Goal Progress: third of six steps under way
+        goal = [ordered]@{ done = 2; total = 6; current = 'Draw the goal progress row under the context gauge'; marks = 'ddcppp' }
     }
     switch ($name) {
         'thinking' { $base.activity = $null; $base.steps[4].start = $now - 35; $base.steps[4].end = $now - 23; $base.quiet_since = $now - 23 }
-        'waiting' { $base.status = 'waiting'; $base.activity = $null }
+        'waiting' { $base.status = 'waiting'; $base.activity = $null; $base.goal = $null }
         'broken'  { $base.ok = $false; $base.error = 'no active session'; $base.text = $null; $base.title = $null }
         'table'   {
             $base.status = 'waiting'; $base.activity = $null

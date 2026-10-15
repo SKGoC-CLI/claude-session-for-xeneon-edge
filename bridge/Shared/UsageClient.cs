@@ -1,4 +1,4 @@
-// Copied from https://github.com/SKGoC-CLI/claude-meter-for-windows (MIT) at v1.10.0 - do not edit here; change it upstream.
+// Copied from https://github.com/SKGoC-CLI/claude-meter-for-windows (MIT) at v1.11.0 - do not edit here; change it upstream.
 using System.Globalization;
 using System.Net;
 using System.Net.Http;
@@ -15,7 +15,11 @@ sealed record UsageWindow(
     bool IsActive = false,      // server marks the limit currently binding
     string Severity = "normal",
     double? UsedDollars = null,  // wallet row only: month-to-date spend / cap, in dollars
-    double? LimitDollars = null);
+    double? LimitDollars = null)
+{
+    /// <summary>Wallet rows (cloud credit, usage-credit balance) are money, never a blocking limit.</summary>
+    public bool IsWallet => Key is "cloud_credit" or "credit_balance";
+}
 
 sealed record UsageSnapshot(IReadOnlyList<UsageWindow> Windows, DateTimeOffset FetchedAt);
 
@@ -82,7 +86,12 @@ sealed class UsageClient
         if (!response.IsSuccessStatusCode)
             throw new UsageException($"Usage endpoint returned HTTP {(int)response.StatusCode}.");
 
-        var root = JsonNode.Parse(await response.Content.ReadAsStringAsync()) as JsonObject
+        string body = await response.Content.ReadAsStringAsync();
+        // latest raw response, overwritten each poll — the only way to see undocumented
+        // fields without touching the token (holds usage numbers only, no secrets)
+        try { Directory.CreateDirectory(Log.Dir); File.WriteAllText(Path.Combine(Log.Dir, "usage-raw.json"), body); } catch (Exception) { }
+
+        var root = JsonNode.Parse(body) as JsonObject
             ?? throw new UsageException("Unexpected response from usage endpoint.");
 
         var windows = ParseWindows(root);
@@ -180,9 +189,28 @@ sealed class UsageClient
             // undocumented field changed type — lose the cloud row, never the whole poll
         }
 
+        // "Usage credits": prepaid balance, shown even when the spend toggle is off.
+        // Shape assumed like spend.used (amount_minor + exponent); a plain number = dollars.
+        try
+        {
+            double? balance = root["spend"]?["balance"] switch
+            {
+                JsonObject b when b["amount_minor"] is JsonNode m =>
+                    m.GetValue<double>() / Math.Pow(10, b["exponent"]?.GetValue<int>() ?? 2),
+                JsonValue v => v.GetValue<double>(),
+                _ => null
+            };
+            if (balance is { } bal)
+                windows.Add(new UsageWindow("credit_balance", "Usage credits", 0, null, false, "normal", bal));
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or FormatException)
+        {
+            // unknown balance shape — lose this row only
+        }
+
         // Session first, plain weekly second, model-scoped after, wallet last.
         return windows
-            .OrderBy(w => w.Key switch { "five_hour" => 0, "seven_day" => 1, "extra_usage" => 8, "cloud_credit" => 9, _ => 2 })
+            .OrderBy(w => w.Key switch { "five_hour" => 0, "seven_day" => 1, "extra_usage" => 8, "cloud_credit" => 9, "credit_balance" => 10, _ => 2 })
             .ThenBy(w => w.Label, StringComparer.Ordinal)
             .ToList();
     }

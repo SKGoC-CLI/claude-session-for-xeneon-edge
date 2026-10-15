@@ -27,7 +27,8 @@ sealed record TailInfo(
     bool HasBridgeSession,
     AskInfo? Ask,
     IReadOnlyList<StepInfo> Steps,
-    DateTimeOffset? QuietSince);
+    DateTimeOffset? QuietSince,
+    string? Cwd = null);
 
 // one tool call of the current turn (Step Feed); End null = still running
 sealed record StepInfo(string Name, string? Label, DateTimeOffset Start, DateTimeOffset? End);
@@ -133,6 +134,7 @@ static class SessionTailer
         lock (CacheLock)
         {
             FileCache.Clear();
+            GoalReader.ResetForTest();
             _lastComputeUtc = DateTime.MinValue;
         }
     }
@@ -178,7 +180,10 @@ static class SessionTailer
         {
             var candidateSet = new HashSet<string>(candidates);
             foreach (var stale in FileCache.Keys.Where(p => !candidateSet.Contains(p)).ToList())
+            {
                 FileCache.Remove(stale);
+                GoalReader.Forget(stale);
+            }
         }
 
         // "attached to the desktop UI" preference, shared by winner selection and the active
@@ -282,6 +287,7 @@ static class SessionTailer
             ContextTokens = borrowCtx ? old.ContextTokens : now.ContextTokens,
             ContextWindow = borrowCtx ? old.ContextWindow : now.ContextWindow,
             HasBridgeSession = now.HasBridgeSession || old.HasBridgeSession,
+            Cwd = now.Cwd ?? old.Cwd,
         };
     }
 
@@ -310,6 +316,7 @@ static class SessionTailer
         var stepIndex = new Dictionary<string, int>(); // tool_use id -> index in steps
         DateTimeOffset? quietSince = null;
         var turnOpen = false;
+        string? cwd = null; // where NEXT-SESSION.md lives (Goal Progress fallback)
 
         foreach (var line in ReadTailLines(path, length))
         {
@@ -324,6 +331,7 @@ static class SessionTailer
                 DateTimeOffset? lineTs = null;
                 // subagent lines are not Steps and neither open nor close this session's turn
                 var side = obj["isSidechain"]?.GetValue<bool>() == true;
+                if (obj["cwd"] is JsonValue cv && cv.TryGetValue<string>(out var cs) && cs.Length > 0) cwd = cs;
                 if (type is "assistant" or "user" && TryGetTimestamp(obj, out var lts))
                 {
                     lineTs = lts;
@@ -503,7 +511,7 @@ static class SessionTailer
         long? contextWindow = contextTokens is null ? null : WindowFor(contextModel);
 
         return new TailInfo(humanPromptAt, prompt, promptAt, title, text, textAt, model, effort, contextTokens, contextWindow, status, activity, sessionId, project, updatedAt, hasBridgeSession, ask,
-            steps.Count > MaxSteps ? steps.GetRange(steps.Count - MaxSteps, MaxSteps) : steps, quietSince);
+            steps.Count > MaxSteps ? steps.GetRange(steps.Count - MaxSteps, MaxSteps) : steps, quietSince, cwd);
     }
 
     // text of a user line (content is a string or an array of text blocks)
@@ -612,7 +620,7 @@ static class SessionTailer
     // ponytail: line-at-a-time, so a **bold** or a `code` span that wraps across a newline keeps its
     // markers, and an escaped \| inside a table cell splits the cell. Both are rare in a chat reply
     // and cost a real parser to fix — revisit only if they actually show up on the screen.
-    static string Plain(string s)
+    internal static string Plain(string s)
     {
         var outLines = new List<string>();
         var inFence = false;

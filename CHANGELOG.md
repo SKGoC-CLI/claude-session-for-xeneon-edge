@@ -5,6 +5,16 @@ All notable changes to Claude Session for XENEON EDGE are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-10-15
+
+### Added
+
+- **Step progress** — a new row right under the context gauge: `STEP 3/6`, one dot per step (green = done, blinking orange = in progress, grey = not started) and the name of the step Claude is working on. Read from the session's step list (the app's plan, or TaskCreate/TaskUpdate); without one, from an active `NEXT-SESSION.md` in the session's folder. Hidden when there is no unfinished list. New iCUE setting *Show Step Progress* (on by default). Needs bridge 1.0.4 and widget 1.0.25.
+
+### Notes
+
+- Upgrading: run `Install.cmd` again (the bridge changed this time), then import `claudesession-v1.0.25.icuewidget` in iCUE.
+
 ## [1.1.0] - 2026-10-15
 
 ### Added

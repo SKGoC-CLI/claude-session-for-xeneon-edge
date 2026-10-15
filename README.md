@@ -16,10 +16,15 @@ Shows your live Claude Code session on the CORSAIR XENEON EDGE 14.5" touchscreen
 - **Multi-session support** — when 2 or more sessions are active, a cycle button (X/Y ▶) lets you switch between them; tapping it (or touching the text) holds that session for 60 seconds
 - **Auto-cycle** — optional: rotate through the sessions that are currently working every 5, 10, 15, 30 or 60 seconds (off by default; set it in the widget's iCUE settings). It pauses while a question is pending or while you are reading
 - **Session title** — optionally shows your custom session title (configurable in iCUE)
+- **Step progress** — `STEP 3/6` with one dot per step (green = done, blinking orange = in progress, grey = not started) and the name of the current step, read from Claude's step list or an active `NEXT-SESSION.md`; hidden when there is no unfinished list (iCUE setting *Show Step Progress*)
 
 ## Screenshots
 
 The Claude widget (center) on a real XENEON EDGE, next to other iCUE widgets.
+
+Live demo (v1.2.0) — step progress dots under the context gauge, the latest reply and the WAITING FOR YOU banner:
+
+![Animated demo of the Claude widget on the XENEON EDGE](docs/demo.gif)
 
 A question is pending — blinking border and the WAITING FOR YOU banner (v1.1.0):
 

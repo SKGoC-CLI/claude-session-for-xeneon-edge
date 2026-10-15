@@ -9,7 +9,8 @@ static class Log
 {
     static readonly object Lock = new();
 
-    static readonly string Dir =
+    // internal: Claude Meter's shared UsageClient.cs writes usage-raw.json here
+    internal static readonly string Dir =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ClaudeEdgeBridge", "logs");
 
     public static void Info(string message) => Write("INFO ", message);
